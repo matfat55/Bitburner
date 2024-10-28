@@ -9,7 +9,7 @@ export async function main(ns) {
   const virusRam = ns.getScriptRam(virus);
   const checkInterval = 60000; // Check for better target every x milliseconds
   const THRESHOLD_MULTIPLIER = 1.1; // New target must be x times better than current
-  
+
   // Server purchasing configuration
   const SERVER_PREFIX = "farm-";
   const MIN_SERVER_RAM = 8; // Starting RAM size
@@ -85,7 +85,7 @@ export async function main(ns) {
 
   async function deployHacks(servers, target, forceAll = false) {
     const serversNeedingDeployment = forceAll ? servers : getServersWithoutVirus(servers);
-    
+
     if (serversNeedingDeployment.length === 0) {
       ns.print("No servers need deployment at this time");
       return;
@@ -134,7 +134,7 @@ export async function main(ns) {
   function getNextServerName() {
     const maxServers = ns.getPurchasedServerLimit();
     const currentServers = ns.getPurchasedServers();
-    
+
     // Create a set of existing server numbers
     const usedNumbers = new Set();
     for (const server of currentServers) {
@@ -143,14 +143,14 @@ export async function main(ns) {
         usedNumbers.add(parseInt(match[1]));
       }
     }
-    
+
     // Find the first unused number
     for (let i = 0; i < maxServers; i++) {
       if (!usedNumbers.has(i)) {
         return `${SERVER_PREFIX}${i}`;
       }
     }
-    
+
     return null; // No available slots
   }
 
@@ -167,14 +167,14 @@ export async function main(ns) {
         if (money - serverCost < RESERVE_MONEY) break;
 
         const serverName = getNextServerName();
-        if (!serverName) break; // No available server slots
+        if (!serverName) break;
 
         try {
           if (ns.purchaseServer(serverName, MIN_SERVER_RAM)) {
             ns.tprint(`Purchased new server: ${serverName} with ${MIN_SERVER_RAM}GB RAM`);
             currentServers.push(serverName);
             if (currentTarget) {
-              await ns.sleep(1000); // Give the system time to properly register the new server
+              await ns.sleep(1000);
               await copyAndRunVirus(serverName, currentTarget);
             }
           }
@@ -193,28 +193,67 @@ export async function main(ns) {
           const upgradeCost = ns.getPurchasedServerCost(targetRam);
 
           if (money - upgradeCost > RESERVE_MONEY) {
-            // Kill all scripts and wait a moment
+            // Create temporary name for new server
+            const tempServerName = `${server}-upgrade`;
+
+            // First purchase the new server
+            if (!ns.purchaseServer(tempServerName, targetRam)) {
+              ns.print(`Failed to purchase upgrade server ${tempServerName}`);
+              continue;
+            }
+
+            // Kill scripts on old server
             ns.killall(server);
             await ns.sleep(1000);
 
-            // Delete the server
+            // Delete the old server
             if (!ns.deleteServer(server)) {
+              // If we can't delete the old server, delete the new one to avoid waste
+              ns.deleteServer(tempServerName);
               ns.print(`Failed to delete server ${server}`);
               continue;
             }
 
-            // Wait a moment before purchasing
-            await ns.sleep(1000);
-
-            // Purchase the upgraded server
-            if (ns.purchaseServer(server, targetRam)) {
-              ns.tprint(`Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
-              await ns.sleep(1000); // Give the system time to properly register the upgraded server
-              if (currentTarget) {
-                await copyAndRunVirus(server, currentTarget);
+            // Rename new server to old name
+            try {
+              await ns.sleep(1000);
+              // In some versions of Bitburner we need to rename, in others we don't
+              // So we'll try the upgrade without rename first
+              if (ns.serverExists(tempServerName)) {
+                if (!ns.deleteServer(tempServerName)) {
+                  ns.print(`Warning: Could not clean up temporary server ${tempServerName}`);
+                  continue;
+                }
               }
-            } else {
-              ns.print(`Failed to purchase upgraded server ${server}`);
+
+              // Purchase with final name
+              if (ns.purchaseServer(server, targetRam)) {
+                ns.tprint(`Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
+                await ns.sleep(1000);
+                if (currentTarget) {
+                  await copyAndRunVirus(server, currentTarget);
+                }
+              } else {
+                ns.print(`Failed to finalize upgrade for ${server}`);
+                // Try to recover by purchasing original size
+                if (ns.purchaseServer(server, currentRam)) {
+                  ns.print(`Recovered ${server} with original RAM`);
+                  await ns.sleep(1000);
+                  if (currentTarget) {
+                    await copyAndRunVirus(server, currentTarget);
+                  }
+                }
+              }
+            } catch (error) {
+              ns.print(`Error during server rename/finalization: ${error.message}`);
+              // Try to recover by purchasing original size
+              if (ns.purchaseServer(server, currentRam)) {
+                ns.print(`Recovered ${server} with original RAM`);
+                await ns.sleep(1000);
+                if (currentTarget) {
+                  await copyAndRunVirus(server, currentTarget);
+                }
+              }
             }
           }
         } catch (error) {
@@ -225,7 +264,6 @@ export async function main(ns) {
       ns.print(`ERROR in manageServers: ${error.message}`);
     }
   }
-
   let currentTarget = "";
   let lastServerCheck = 0;
 
@@ -263,7 +301,7 @@ export async function main(ns) {
         currentTarget = bestTarget;
       } else {
         await deployHacks(hackableServers, bestTarget, false);
-        
+
         if (bestTarget !== currentTarget) {
           ns.print(`Better target found (${bestTarget}), but improvement not significant enough to switch`);
         } else {
