@@ -9,6 +9,13 @@ export async function main(ns) {
   const virusRam = ns.getScriptRam(virus);
   const checkInterval = 60000; // Check for better target every x milliseconds
   const THRESHOLD_MULTIPLIER = 1.1; // New target must be x times better than current
+  
+  // Server purchasing configuration
+  const SERVER_PREFIX = "farm-";
+  const MIN_SERVER_RAM = 8; // Starting RAM size
+  const RESERVE_MONEY = 1e6; // Keep this much money in reserve
+  const SERVER_CHECK_INTERVAL = 30000; // Check for server upgrades every 30 seconds
+  const RAM_UPGRADE_MULTIPLIER = 4; // Upgrade RAM by this factor
 
   const cracks = {
     "BruteSSH.exe": ns.brutessh,
@@ -72,8 +79,6 @@ export async function main(ns) {
   }
 
   async function deployHacks(servers, target, forceAll = false) {
-    // If forceAll is true, we'll redeploy to all servers
-    // Otherwise, only deploy to servers without the virus
     const serversNeedingDeployment = forceAll ? servers : getServersWithoutVirus(servers);
     
     if (serversNeedingDeployment.length === 0) {
@@ -112,7 +117,6 @@ export async function main(ns) {
 
     const newYield = newTargetInfo.revYield;
     const currentYield = currentTargetInfo.revYield;
-
     const improvement = newYield / currentYield;
 
     ns.print(`Potential improvement: ${(improvement * 100 - 100).toFixed(2)}% ` +
@@ -122,10 +126,63 @@ export async function main(ns) {
     return improvement >= THRESHOLD_MULTIPLIER;
   }
 
+  async function manageServers(currentTarget) {
+    const maxRam = ns.getPurchasedServerMaxRam();
+    const maxServers = ns.getPurchasedServerLimit();
+    const currentServers = ns.getPurchasedServers();
+    const money = ns.getServerMoneyAvailable("home");
+
+    // First, try to buy new servers
+    while (currentServers.length < maxServers) {
+      const serverCost = ns.getPurchasedServerCost(MIN_SERVER_RAM);
+      if (money - serverCost < RESERVE_MONEY) break;
+
+      const serverName = `${SERVER_PREFIX}${currentServers.length}`;
+      if (ns.purchaseServer(serverName, MIN_SERVER_RAM)) {
+        ns.tprint(`Purchased new server: ${serverName} with ${MIN_SERVER_RAM}GB RAM`);
+        currentServers.push(serverName);
+        if (currentTarget) {
+          await copyAndRunVirus(serverName, currentTarget);
+        }
+      }
+    }
+
+    // Then, try to upgrade existing servers
+    for (const server of currentServers) {
+      const currentRam = ns.getServerMaxRam(server);
+      if (currentRam >= maxRam) continue;
+
+      const targetRam = Math.min(maxRam, currentRam * RAM_UPGRADE_MULTIPLIER);
+      const upgradeCost = ns.getPurchasedServerCost(targetRam);
+
+      if (money - upgradeCost > RESERVE_MONEY) {
+        const oldServer = server;
+        // Delete old server and buy new one with more RAM
+        ns.killall(server);
+        ns.deleteServer(server);
+        if (ns.purchaseServer(oldServer, targetRam)) {
+          ns.tprint(`Upgraded server ${oldServer} from ${currentRam}GB to ${targetRam}GB RAM`);
+          if (currentTarget) {
+            await copyAndRunVirus(oldServer, currentTarget);
+          }
+        }
+      }
+    }
+  }
+
   let currentTarget = "";
+  let lastServerCheck = 0;
 
   while (true) {
-    // First, get the best target
+    const currentTime = Date.now();
+
+    // Check for server purchases/upgrades periodically
+    if (currentTime - lastServerCheck >= SERVER_CHECK_INTERVAL) {
+      await manageServers(currentTarget);
+      lastServerCheck = currentTime;
+    }
+
+    // Get the best target
     const potentialTargets = getPotentialTargets(ns, "revYield");
     if (potentialTargets.length === 0) {
       ns.print("No viable targets found. Waiting...");
@@ -134,8 +191,6 @@ export async function main(ns) {
     }
 
     const bestTarget = potentialTargets[0].node;
-    
-    // Get current list of hackable servers
     const hackableServers = getHackableServers();
 
     // Check if we need to switch targets
@@ -147,11 +202,9 @@ export async function main(ns) {
       ns.tprint(`Hack chance: ${(potentialTargets[0].hackChance * 100).toFixed(2)}%`);
       ns.tprint(`Improvement threshold of ${((THRESHOLD_MULTIPLIER - 1) * 100).toFixed(0)}% exceeded`);
 
-      // Deploy to all servers with the new target
       await deployHacks(hackableServers, bestTarget, true);
       currentTarget = bestTarget;
     } else {
-      // Just check for and deploy to servers that don't have the virus
       await deployHacks(hackableServers, bestTarget, false);
       
       if (bestTarget !== currentTarget) {
