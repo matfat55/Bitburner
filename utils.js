@@ -1,4 +1,4 @@
-var homeServer = "home";
+const homeServer = "home";
 
 /** @param {NS} ns **/
 export function getNetworkNodes(ns) {
