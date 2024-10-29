@@ -3,115 +3,148 @@ import { penetrate, canPenetrate, hasRam, getNetworkNodes } from "./utils.js";
 
 /** @param {NS} ns */
 export async function main(ns) {
-  // Configuration
-  const homeServer = "home";
-  const virus = "gimme-money.js";
-  const virusRam = ns.getScriptRam(virus);
-  const checkInterval = 60000; // Check for better target every x milliseconds
-  const THRESHOLD_MULTIPLIER = 1.1; // New target must be x times better than current
+  // Disable all logs initially
+  ns.disableLog('ALL');
 
-  // Server purchasing configuration
-  const SERVER_PREFIX = "farm-";
-  const MIN_SERVER_RAM = 8; // Starting RAM size
-  const RESERVE_MONEY = 1e6; // Keep this much money in reserve
-  const SERVER_CHECK_INTERVAL = 30000; // Check for server upgrades every 30 seconds
-  const RAM_UPGRADE_MULTIPLIER = 4; // Upgrade RAM by this factor
+  // Enable specific logs for important operations
+  ns.enableLog('purchaseServer');  // Track server purchases
+  ns.enableLog('deleteServer');    // Track server deletions
+  ns.enableLog('nuke');           // Track when we gain root access
+  ns.enableLog('exec');           // Track virus deployments
+  ns.enableLog('killall');        // Track when we kill processes for upgrades
 
-  const cracks = {
-    "BruteSSH.exe": ns.brutessh,
-    "FTPCrack.exe": ns.ftpcrack,
-    "relaySMTP.exe": ns.relaysmtp,
-    "HTTPWorm.exe": ns.httpworm,
-    "SQLInject.exe": ns.sqlinject
+  // Configuration - moved to top for easier management
+  const CONFIG = {
+    virus: "gimme-money.js",
+    checkInterval: 60000,
+    thresholdMultiplier: 1.1,
+    serverPrefix: "farm-",
+    minServerRam: 8,
+    reserveMoney: 1e6,
+    serverCheckInterval: 30000,
+    ramUpgradeMultiplier: 4
   };
 
-  async function copyAndRunVirus(server, target) {
+  // Cache script RAM usage
+  const virusRam = ns.getScriptRam(CONFIG.virus);
+
+  // Cache available exploits
+  const cracks = new Map([
+    ["BruteSSH.exe", ns.brutessh],
+    ["FTPCrack.exe", ns.ftpcrack],
+    ["relaySMTP.exe", ns.relaysmtp],
+    ["HTTPWorm.exe", ns.httpworm],
+    ["SQLInject.exe", ns.sqlinject]
+  ]);
+
+  // Memoize server limits
+  const maxServers = ns.getPurchasedServerLimit();
+  const maxRam = ns.getPurchasedServerMaxRam();
+
+  /**
+    * Deploys virus to a server
+    * @param {string} server - Target server
+    * @param {string} target - Server to hack
+    * @returns {Promise<boolean>} - Success status
+    */
+  async function deployVirus(server, target) {
     try {
-      ns.print(`Copying virus to server: ${server} targeting ${target}`);
-      await ns.scp(virus, server);
+      await ns.scp(CONFIG.virus, server);
 
       if (!ns.hasRootAccess(server)) {
         const requiredPorts = ns.getServerNumPortsRequired(server);
         if (requiredPorts > 0) {
           penetrate(ns, server, cracks);
         }
-        ns.print(`Gaining root access on ${server}`);
         ns.nuke(server);
       }
 
-      if (ns.scriptRunning(virus, server)) {
-        ns.scriptKill(virus, server);
+      if (ns.scriptRunning(CONFIG.virus, server)) {
+        ns.scriptKill(CONFIG.virus, server);
       }
 
       const maxThreads = Math.floor(ns.getServerMaxRam(server) / virusRam);
       if (maxThreads > 0) {
-        ns.exec(virus, server, maxThreads, target);
+        ns.exec(CONFIG.virus, server, maxThreads, target);
         return true;
       }
       return false;
     } catch (error) {
-      ns.print(`ERROR deploying to ${server}: ${error.message}`);
+      // Log deployment errors as they're critical
+      ns.tprint(`ERROR deploying to ${server}: ${error.message}`);
       return false;
     }
   }
 
-  function getHackableServers() {
-    const targets = [];
 
-    // Add all network servers using deep scan
-    const networkNodes = getNetworkNodes(ns);
-    for (const node of networkNodes) {
-      if (node !== 'home' && // Skip home server
+  /**
+   * Gets list of hackable servers
+   * @returns {string[]} - List of hackable servers
+   */
+  function getHackableServers() {
+    const targets = new Set();
+
+    // Add network servers
+    for (const node of getNetworkNodes(ns)) {
+      if (node !== 'home' &&
         canPenetrate(ns, node, cracks) &&
         hasRam(ns, node, virusRam, true)) {
-        targets.push(node);
+        targets.add(node);
       }
     }
 
     // Add purchased servers
-    const purchasedServers = ns.getPurchasedServers();
-    for (const server of purchasedServers) {
+    for (const server of ns.getPurchasedServers()) {
       if (hasRam(ns, server, virusRam, true)) {
-        targets.push(server);
+        targets.add(server);
       }
     }
 
-    return targets;
+    return Array.from(targets);
   }
 
-  function getServersWithoutVirus(servers) {
-    return servers.filter(server => !ns.scriptRunning(virus, server));
-  }
+  /**
+   * Gets servers without virus running
+   * @param {string[]} servers - List of servers
+   * @returns {string[]} - Servers without virus
+   */
+  const getServersWithoutVirus = servers =>
+    servers.filter(server => !ns.scriptRunning(CONFIG.virus, server));
 
+  /**
+   * Deploys hacks to servers
+   * @param {string[]} servers - Target servers
+   * @param {string} target - Server to hack
+   * @param {boolean} forceAll - Force deployment to all servers
+   */
   async function deployHacks(servers, target, forceAll = false) {
     const serversNeedingDeployment = forceAll ? servers : getServersWithoutVirus(servers);
 
-    if (serversNeedingDeployment.length === 0) {
-      ns.print("No servers need deployment at this time");
-      return;
-    }
+    if (serversNeedingDeployment.length === 0) return;
 
     ns.tprint(`Deploying virus to ${serversNeedingDeployment.length} servers, targeting ${target}`);
-    let successCount = 0;
-    let failCount = 0;
 
-    for (const server of serversNeedingDeployment) {
-      const success = await copyAndRunVirus(server, target);
-      if (success) {
-        successCount++;
-      } else {
-        failCount++;
-        ns.print(`Failed to deploy to ${server} - insufficient RAM or server unavailable`);
-      }
-    }
+    const results = await Promise.all(
+      serversNeedingDeployment.map(server => deployVirus(server, target))
+    );
 
-    ns.tprint(`Deployment complete:`);
-    ns.tprint(`- Successfully deployed to ${successCount} servers`);
-    if (failCount > 0) {
-      ns.tprint(`- Failed to deploy to ${failCount} servers`);
-    }
+    const successCount = results.filter(Boolean).length;
+    const failCount = results.length - successCount;
+
+    ns.tprint(
+      `Deployment complete:\n` +
+      `- Successfully deployed to ${successCount} servers\n` +
+      (failCount > 0 ? `- Failed to deploy to ${failCount} servers` : '')
+    );
   }
 
+  /**
+   * Checks if new target is significantly better
+   * @param {string} newTarget - Potential new target
+   * @param {string} currentTarget - Current target
+   * @param {Array} potentialTargets - List of potential targets
+   * @returns {boolean} - True if new target is better
+   */
   function isSignificantlyBetter(newTarget, currentTarget, potentialTargets) {
     if (!currentTarget) return true;
 
@@ -120,150 +153,115 @@ export async function main(ns) {
 
     if (!currentTargetInfo) return true;
 
-    const newYield = newTargetInfo.revYield;
-    const currentYield = currentTargetInfo.revYield;
-    const improvement = newYield / currentYield;
+    const improvement = newTargetInfo.revYield / currentTargetInfo.revYield;
 
-    ns.print(`Potential improvement: ${(improvement * 100 - 100).toFixed(2)}% ` +
-      `(Current: $${ns.formatNumber(currentYield)}, ` +
-      `New: $${ns.formatNumber(newYield)})`);
+    ns.print(
+      `Potential improvement: ${(improvement * 100 - 100).toFixed(2)}% ` +
+      `(Current: $${ns.formatNumber(currentTargetInfo.revYield)}, ` +
+      `New: $${ns.formatNumber(newTargetInfo.revYield)})`
+    );
 
-    return improvement >= THRESHOLD_MULTIPLIER;
+    return improvement >= CONFIG.thresholdMultiplier;
   }
 
+  /**
+   * Gets next available server name
+   * @returns {string|null} - Next server name or null if none available
+   */
   function getNextServerName() {
-    const maxServers = ns.getPurchasedServerLimit();
-    const currentServers = ns.getPurchasedServers();
+    const currentServers = new Set(ns.getPurchasedServers());
 
-    // Create a set of existing server numbers
-    const usedNumbers = new Set();
-    for (const server of currentServers) {
-      const match = server.match(new RegExp(`^${SERVER_PREFIX}(\\d+)$`));
-      if (match) {
-        usedNumbers.add(parseInt(match[1]));
-      }
-    }
-
-    // Find the first unused number
     for (let i = 0; i < maxServers; i++) {
-      if (!usedNumbers.has(i)) {
-        return `${SERVER_PREFIX}${i}`;
-      }
+      const name = `${CONFIG.serverPrefix}${i}`;
+      if (!currentServers.has(name)) return name;
     }
 
-    return null; // No available slots
+    return null;
   }
 
+  /**
+   * Manages server purchases and upgrades
+   * @param {string} currentTarget - Current target server
+   */
+
+  /**
+   * Manages server purchases and upgrades
+   * @param {string} currentTarget - Current target server
+   */
   async function manageServers(currentTarget) {
     try {
-      const maxRam = ns.getPurchasedServerMaxRam();
-      const maxServers = ns.getPurchasedServerLimit();
-      const currentServers = ns.getPurchasedServers();
       const money = ns.getServerMoneyAvailable("home");
+      const currentServers = ns.getPurchasedServers();
 
-      // First, try to buy new servers
+      // Buy new servers
       while (currentServers.length < maxServers) {
-        const serverCost = ns.getPurchasedServerCost(MIN_SERVER_RAM);
-        if (money - serverCost < RESERVE_MONEY) break;
+        const serverCost = ns.getPurchasedServerCost(CONFIG.minServerRam);
+        if (money - serverCost < CONFIG.reserveMoney) break;
 
         const serverName = getNextServerName();
         if (!serverName) break;
 
-        try {
-          if (ns.purchaseServer(serverName, MIN_SERVER_RAM)) {
-            ns.tprint(`Purchased new server: ${serverName} with ${MIN_SERVER_RAM}GB RAM`);
-            currentServers.push(serverName);
-            if (currentTarget) {
-              await ns.sleep(1000);
-              await copyAndRunVirus(serverName, currentTarget);
-            }
+        if (ns.purchaseServer(serverName, CONFIG.minServerRam)) {
+          // Important server acquisition message
+          ns.tprint(`SUCCESS: Purchased new server ${serverName} with ${CONFIG.minServerRam}GB RAM`);
+          currentServers.push(serverName);
+          if (currentTarget) {
+            await ns.sleep(1000);
+            await deployVirus(serverName, currentTarget);
           }
-        } catch (error) {
-          ns.print(`ERROR purchasing server ${serverName}: ${error.message}`);
         }
       }
 
-      // Then, try to upgrade existing servers
+      // Upgrade existing servers
       for (const server of currentServers) {
-        try {
-          const currentRam = ns.getServerMaxRam(server);
-          if (currentRam >= maxRam) continue;
+        const currentRam = ns.getServerMaxRam(server);
+        if (currentRam >= maxRam) continue;
 
-          const targetRam = Math.min(maxRam, currentRam * RAM_UPGRADE_MULTIPLIER);
-          const upgradeCost = ns.getPurchasedServerCost(targetRam);
+        const targetRam = Math.min(maxRam, currentRam * CONFIG.ramUpgradeMultiplier);
+        const upgradeCost = ns.getPurchasedServerCost(targetRam);
 
-          if (money - upgradeCost > RESERVE_MONEY) {
-            // Create temporary name for new server
-            const tempServerName = `${server}-upgrade`;
-
-            // First purchase the new server
-            if (!ns.purchaseServer(tempServerName, targetRam)) {
-              ns.print(`Failed to purchase upgrade server ${tempServerName}`);
-              continue;
-            }
-
-            // Kill scripts on old server
-            ns.killall(server);
-            await ns.sleep(1000);
-
-            // Delete the old server
-            if (!ns.deleteServer(server)) {
-              // If we can't delete the old server, delete the new one to avoid waste
-              ns.deleteServer(tempServerName);
-              ns.print(`Failed to delete server ${server}`);
-              continue;
-            }
-
-            // Rename new server to old name
-            try {
-              await ns.sleep(1000);
-              // In some versions of Bitburner we need to rename, in others we don't
-              // So we'll try the upgrade without rename first
-              if (ns.serverExists(tempServerName)) {
-                if (!ns.deleteServer(tempServerName)) {
-                  ns.print(`Warning: Could not clean up temporary server ${tempServerName}`);
-                  continue;
-                }
-              }
-
-              // Purchase with final name
-              if (ns.purchaseServer(server, targetRam)) {
-                ns.tprint(`Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
-                await ns.sleep(1000);
-                if (currentTarget) {
-                  await copyAndRunVirus(server, currentTarget);
-                }
-              } else {
-                ns.print(`Failed to finalize upgrade for ${server}`);
-                // Try to recover by purchasing original size
-                if (ns.purchaseServer(server, currentRam)) {
-                  ns.print(`Recovered ${server} with original RAM`);
-                  await ns.sleep(1000);
-                  if (currentTarget) {
-                    await copyAndRunVirus(server, currentTarget);
-                  }
-                }
-              }
-            } catch (error) {
-              ns.print(`Error during server rename/finalization: ${error.message}`);
-              // Try to recover by purchasing original size
-              if (ns.purchaseServer(server, currentRam)) {
-                ns.print(`Recovered ${server} with original RAM`);
-                await ns.sleep(1000);
-                if (currentTarget) {
-                  await copyAndRunVirus(server, currentTarget);
-                }
-              }
-            }
+        if (money - upgradeCost > CONFIG.reserveMoney) {
+          if (await upgradeServer(server, targetRam, currentTarget)) {
+            // Important upgrade message
+            ns.print(`SUCCESS: Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
           }
-        } catch (error) {
-          ns.print(`ERROR upgrading server ${server}: ${error.message}`);
         }
       }
     } catch (error) {
-      ns.print(`ERROR in manageServers: ${error.message}`);
+      // Log server management errors as they're critical
+      ns.tprint(`CRITICAL ERROR in manageServers: ${error.message}`);
     }
   }
+  /**
+   * Upgrades a server
+   * @param {string} server - Server to upgrade
+   * @param {number} targetRam - Target RAM
+   * @param {string} currentTarget - Current target server
+   * @returns {Promise<boolean>} - Success status
+   */
+  async function upgradeServer(server, targetRam, currentTarget) {
+    const currentRam = ns.getServerMaxRam(server);
+
+    ns.killall(server);
+    await ns.sleep(1000);
+
+    if (!ns.deleteServer(server)) return false;
+
+    if (!ns.purchaseServer(server, targetRam)) {
+      // Recovery attempt
+      if (ns.purchaseServer(server, currentRam)) {
+        await ns.sleep(1000);
+        if (currentTarget) await deployVirus(server, currentTarget);
+      }
+      return false;
+    }
+
+    await ns.sleep(1000);
+    if (currentTarget) await deployVirus(server, currentTarget);
+    return true;
+  }
+
+  // Main loop
   let currentTarget = "";
   let lastServerCheck = 0;
 
@@ -271,49 +269,45 @@ export async function main(ns) {
     try {
       const currentTime = Date.now();
 
-      // Check for server purchases/upgrades periodically
-      if (currentTime - lastServerCheck >= SERVER_CHECK_INTERVAL) {
+      // Server management
+      if (currentTime - lastServerCheck >= CONFIG.serverCheckInterval) {
         await manageServers(currentTarget);
         lastServerCheck = currentTime;
       }
 
-      // Get the best target
+      // Target management
       const potentialTargets = getPotentialTargets(ns, "revYield");
       if (potentialTargets.length === 0) {
-        ns.print("No viable targets found. Waiting...");
-        await ns.sleep(checkInterval);
+        ns.print(`WARNING: No viable targets found. Waiting...`);
+        await ns.sleep(CONFIG.checkInterval);
         continue;
       }
 
       const bestTarget = potentialTargets[0].node;
       const hackableServers = getHackableServers();
 
-      // Check if we need to switch targets
       if (bestTarget !== currentTarget &&
         isSignificantlyBetter(bestTarget, currentTarget, potentialTargets)) {
 
-        ns.tprint(`Found significantly better target: ${bestTarget} (previous: ${currentTarget || "none"})`);
-        ns.tprint(`Money available: $${ns.formatNumber(potentialTargets[0].maxMoney)}`);
-        ns.tprint(`Hack chance: ${(potentialTargets[0].hackChance * 100).toFixed(2)}%`);
-        ns.tprint(`Improvement threshold of ${((THRESHOLD_MULTIPLIER - 1) * 100).toFixed(0)}% exceeded`);
+        // Important target change notification
+        ns.tprint(
+          `TARGET CHANGE: Switching to ${bestTarget}\n` +
+          `Money available: $${ns.formatNumber(potentialTargets[0].maxMoney)}\n` +
+          `Hack chance: ${(potentialTargets[0].hackChance * 100).toFixed(2)}%\n` +
+          `Improvement: ${((CONFIG.thresholdMultiplier - 1) * 100).toFixed(0)}%+`
+        );
 
         await deployHacks(hackableServers, bestTarget, true);
         currentTarget = bestTarget;
       } else {
         await deployHacks(hackableServers, bestTarget, false);
-
-        if (bestTarget !== currentTarget) {
-          ns.print(`Better target found (${bestTarget}), but improvement not significant enough to switch`);
-        } else {
-          ns.print(`Current target ${currentTarget} is still optimal`);
-          ns.run("abt.js", 1, currentTarget);
-        }
       }
 
-      await ns.sleep(checkInterval);
+      await ns.sleep(CONFIG.checkInterval);
     } catch (error) {
-      ns.print(`ERROR in main loop: ${error.message}`);
-      await ns.sleep(checkInterval);
+      // Log main loop errors as they're critical
+      ns.tprint(`CRITICAL ERROR in main loop: ${error.message}`);
+      await ns.sleep(CONFIG.checkInterval);
     }
   }
 }
