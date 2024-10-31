@@ -6,9 +6,9 @@ export async function main(ns) {
   //logs
   ns.disableLog('ALL');
 
-  ns.enableLog('purchaseServer');  
-  ns.enableLog('deleteServer');    
-  ns.enableLog('nuke');           
+  ns.enableLog('purchaseServer');
+  ns.enableLog('deleteServer');
+  ns.enableLog('nuke');
   ns.enableLog('killall');
 
   // Config shi
@@ -46,6 +46,10 @@ export async function main(ns) {
     */
   async function deployVirus(server, target) {
     try {
+      if (!server || !target) {
+        ns.print(`WARNING: Invalid server (${server}) or target (${target})`);
+        return false;
+      }
       await ns.scp(CONFIG.virus, server);
 
       if (!ns.hasRootAccess(server)) {
@@ -85,6 +89,7 @@ export async function main(ns) {
     // Add network servers
     for (const node of getNetworkNodes(ns)) {
       if (node !== 'home' &&
+        node &&  // null check
         canPenetrate(ns, node, cracks) &&
         hasRam(ns, node, virusRam, true)) {
         targets.add(node);
@@ -93,7 +98,7 @@ export async function main(ns) {
 
     // Add purchased servers
     for (const server of ns.getPurchasedServers()) {
-      if (hasRam(ns, server, virusRam, true)) {
+      if (server && hasRam(ns, server, virusRam, true)) { //null check
         targets.add(server);
       }
     }
@@ -107,7 +112,7 @@ export async function main(ns) {
    * @returns {string[]} - Servers without virus
    */
   const getServersWithoutVirus = servers =>
-    servers.filter(server => !ns.scriptRunning(CONFIG.virus, server));
+    servers.filter(server => server && !ns.scriptRunning(CONFIG.virus, server));
 
   /**
    * Deploys hacks to servers
@@ -116,6 +121,10 @@ export async function main(ns) {
    * @param {boolean} forceAll - Force deployment to all servers
    */
   async function deployHacks(servers, target, forceAll = false) {
+    if (!target) {
+      ns.print("WARNING: No target specified for deployment");
+      return;
+    }
     const serversNeedingDeployment = forceAll ? servers : getServersWithoutVirus(servers);
 
     if (serversNeedingDeployment.length === 0) return; //if none need deployment
@@ -145,14 +154,16 @@ export async function main(ns) {
    */
   function isSignificantlyBetter(newTarget, currentTarget, potentialTargets) {
     if (!currentTarget) return true;
-
+    if (!newTarget) return false;
     const newTargetInfo = potentialTargets.find(t => t.node === newTarget);
     const currentTargetInfo = potentialTargets.find(t => t.node === currentTarget);
 
-    if (!currentTargetInfo) return true;
-
-    const improvement = newTargetInfo.revYield / currentTargetInfo.revYield;
-
+    if (!newTargetInfo || !currentTargetInfo) {
+      ns.print(`WARNING: Could not find target info for comparison`);
+      return false;
+    }
+  const improvement = newTargetInfo.revYield / (currentTargetInfo.revYield || 1);
+  
     ns.tprint(
       `Potential improvement: ${(improvement * 100 - 100).toFixed(2)}% ` +
       `(Current: $${ns.formatNumber(currentTargetInfo.revYield)}, ` +
