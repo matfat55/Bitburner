@@ -27,14 +27,19 @@ export function getNetworkNodes(ns) {
 /** @param {NS} ns **/
 export function penetrate(ns, server, cracks) {
 	ns.print("Penetrating " + server);
+	const requiredPorts = ns.getServerNumPortsRequired(server);
+	let openedPorts = 0;
 	for (var file of Object.keys(cracks)) {
 		if (ns.fileExists(file, homeServer)) {
 			var runScript = cracks[file];
 			runScript(server);
+			openedPorts++;
+			if (openedPorts >= requiredPorts) {
+				break;
+			}
 		}
 	}
 }
-
 /** @param {NS} ns **/
 function getNumCracks(ns, cracks) {
 	return Object.keys(cracks).filter(function (file) {
