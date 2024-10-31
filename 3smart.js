@@ -3,41 +3,38 @@ import { penetrate, canPenetrate, hasRam, getNetworkNodes } from "./utils.js";
 
 /** @param {NS} ns */
 export async function main(ns) {
-  // Disable all logs initially
+  //logs
   ns.disableLog('ALL');
 
-  // Enable specific logs for important operations
-  ns.enableLog('purchaseServer');  // Track server purchases
-  ns.enableLog('deleteServer');    // Track server deletions
-  ns.enableLog('nuke');           // Track when we gain root access
-  ns.enableLog('exec');           // Track virus deployments
-  ns.enableLog('killall');        // Track when we kill processes for upgrades
+  ns.enableLog('purchaseServer');  
+  ns.enableLog('deleteServer');    
+  ns.enableLog('nuke');           
+  ns.enableLog('killall');
 
-  // Configuration - moved to top for easier management
+  // Config shi
   const CONFIG = {
-    virus: "gimme-money.js",
+    virus: "gimme-money.js", //yes i stole that guy on youtubes name
     checkInterval: 60000,
     thresholdMultiplier: 1.1,
     serverPrefix: "farm-",
-    minServerRam: 8,
+    minServerRam: 128,
     reserveMoney: 1e6,
-    serverCheckInterval: 30000,
+    serverCheckInterval: 60000,
     ramUpgradeMultiplier: 4
   };
 
-  // Cache script RAM usage
+  //  script RAM usage
   const virusRam = ns.getScriptRam(CONFIG.virus);
 
-  // Cache available exploits
-  const cracks = new Map([
-    ["BruteSSH.exe", ns.brutessh],
-    ["FTPCrack.exe", ns.ftpcrack],
-    ["relaySMTP.exe", ns.relaysmtp],
-    ["HTTPWorm.exe", ns.httpworm],
-    ["SQLInject.exe", ns.sqlinject]
-  ]);
+  const cracks = {
+    "BruteSSH.exe": ns.brutessh,
+    "FTPCrack.exe": ns.ftpcrack,
+    "relaySMTP.exe": ns.relaysmtp,
+    "HTTPWorm.exe": ns.httpworm,
+    "SQLInject.exe": ns.sqlinject
+  };
 
-  // Memoize server limits
+  //  server limits
   const maxServers = ns.getPurchasedServerLimit();
   const maxRam = ns.getPurchasedServerMaxRam();
 
@@ -59,9 +56,10 @@ export async function main(ns) {
         ns.nuke(server);
       }
 
-      if (ns.scriptRunning(CONFIG.virus, server)) {
+      /**if (ns.scriptRunning(CONFIG.virus, server)) {
         ns.scriptKill(CONFIG.virus, server);
-      }
+      }**/
+      ns.killall(server);
 
       const maxThreads = Math.floor(ns.getServerMaxRam(server) / virusRam);
       if (maxThreads > 0) {
@@ -70,7 +68,7 @@ export async function main(ns) {
       }
       return false;
     } catch (error) {
-      // Log deployment errors as they're critical
+      // error handle
       ns.tprint(`ERROR deploying to ${server}: ${error.message}`);
       return false;
     }
@@ -120,7 +118,7 @@ export async function main(ns) {
   async function deployHacks(servers, target, forceAll = false) {
     const serversNeedingDeployment = forceAll ? servers : getServersWithoutVirus(servers);
 
-    if (serversNeedingDeployment.length === 0) return;
+    if (serversNeedingDeployment.length === 0) return; //if none need deployment
 
     ns.tprint(`Deploying virus to ${serversNeedingDeployment.length} servers, targeting ${target}`);
 
@@ -139,7 +137,7 @@ export async function main(ns) {
   }
 
   /**
-   * Checks if new target is significantly better
+   * Checks if new target is  better by set amount (config threshhold multi)
    * @param {string} newTarget - Potential new target
    * @param {string} currentTarget - Current target
    * @param {Array} potentialTargets - List of potential targets
@@ -155,7 +153,7 @@ export async function main(ns) {
 
     const improvement = newTargetInfo.revYield / currentTargetInfo.revYield;
 
-    ns.print(
+    ns.tprint(
       `Potential improvement: ${(improvement * 100 - 100).toFixed(2)}% ` +
       `(Current: $${ns.formatNumber(currentTargetInfo.revYield)}, ` +
       `New: $${ns.formatNumber(newTargetInfo.revYield)})`
@@ -183,11 +181,6 @@ export async function main(ns) {
    * Manages server purchases and upgrades
    * @param {string} currentTarget - Current target server
    */
-
-  /**
-   * Manages server purchases and upgrades
-   * @param {string} currentTarget - Current target server
-   */
   async function manageServers(currentTarget) {
     try {
       const money = ns.getServerMoneyAvailable("home");
@@ -202,7 +195,7 @@ export async function main(ns) {
         if (!serverName) break;
 
         if (ns.purchaseServer(serverName, CONFIG.minServerRam)) {
-          // Important server acquisition message
+          // server acquisition message
           ns.tprint(`SUCCESS: Purchased new server ${serverName} with ${CONFIG.minServerRam}GB RAM`);
           currentServers.push(serverName);
           if (currentTarget) {
@@ -222,8 +215,8 @@ export async function main(ns) {
 
         if (money - upgradeCost > CONFIG.reserveMoney) {
           if (await upgradeServer(server, targetRam, currentTarget)) {
-            // Important upgrade message
-            ns.print(`SUCCESS: Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
+            //  upgrade message
+            ns.tprint(`SUCCESS: Upgraded server ${server} from ${currentRam}GB to ${targetRam}GB RAM`);
           }
         }
       }
@@ -264,7 +257,8 @@ export async function main(ns) {
   // Main loop
   let currentTarget = "";
   let lastServerCheck = 0;
-
+  let lastMoney = 0;
+  let lastSecurity = 0;
   while (true) {
     try {
       const currentTime = Date.now();
@@ -289,23 +283,61 @@ export async function main(ns) {
       if (bestTarget !== currentTarget &&
         isSignificantlyBetter(bestTarget, currentTarget, potentialTargets)) {
 
-        // Important target change notification
+        var crevYield = 0;
+        if (currentTarget) {  // Only calculate if currentTarget exists
+          var cmaxMoney = ns.getServerMaxMoney(currentTarget);
+          var cplayer = ns.getPlayer();
+          var chackChance = ns.formulas.hacking.hackChance(currentTarget, cplayer);
+          crevYield = cmaxMoney * chackChance;
+        }
+
         ns.tprint(
           `TARGET CHANGE: Switching to ${bestTarget}\n` +
-          `Money available: $${ns.formatNumber(potentialTargets[0].maxMoney)}\n` +
-          `Hack chance: ${(potentialTargets[0].hackChance * 100).toFixed(2)}%\n` +
-          `Improvement: ${((CONFIG.thresholdMultiplier - 1) * 100).toFixed(0)}%+`
+          `Max Money: $${ns.formatNumber(potentialTargets[0].maxMoney)}\n` +
+          `New Rev Yield: ${potentialTargets[0].revYield.toFixed(2)}\n` +
+          `Old Rev Yield: ${crevYield.toFixed(2)}\n`
         );
 
-        await deployHacks(hackableServers, bestTarget, true);
+        ns.run("abt.js", 1, bestTarget);  // abt.js shows info about a server
         currentTarget = bestTarget;
-      } else {
-        await deployHacks(hackableServers, bestTarget, false);
+        lastMoney = ns.getServerMoneyAvailable(currentTarget);
+        lastSecurity = ns.getServerSecurityLevel(currentTarget);
+        await deployHacks(hackableServers, bestTarget, true);
+      }
+
+      // Check for stat changes
+      const currentMoney = ns.getServerMoneyAvailable(currentTarget);
+      const currentSecurity = ns.getServerSecurityLevel(currentTarget);
+      const minimumSecurity = ns.getServerMinSecurityLevel(currentTarget);
+      const maximumMoney = ns.getServerMaxMoney(currentTarget);
+
+      if (currentMoney !== lastMoney || currentSecurity !== lastSecurity) {
+        // Money change message
+        let moneyMessage = "";
+        if (currentMoney > lastMoney) {
+          moneyMessage = `Grew to $${ns.formatNumber(currentMoney)}, was previously $${ns.formatNumber(lastMoney)}, maximum is $${ns.formatNumber(maximumMoney)}`;
+        } else if (currentMoney < lastMoney) {
+          moneyMessage = `Reduced to $${ns.formatNumber(currentMoney)}, was previously $${ns.formatNumber(lastMoney)}, maximum is $${ns.formatNumber(maximumMoney)}`;
+        }
+
+        // Security change message
+        let securityMessage = "";
+        if (currentSecurity > lastSecurity) {
+          securityMessage = `Security increased to ${currentSecurity.toFixed(2)}, was previously ${lastSecurity.toFixed(2)}, minimum is ${minimumSecurity.toFixed(2)}`;
+        } else if (currentSecurity < lastSecurity) {
+          securityMessage = `Weakened to ${currentSecurity.toFixed(2)}, was previously ${lastSecurity.toFixed(2)}, minimum is ${minimumSecurity.toFixed(2)}`;
+        }
+
+        // Print the update message if there were changes
+        ns.tprint(`UPDATE: ${currentTarget} - ${moneyMessage}; ${securityMessage}`);
+
+        // Update last known values
+        lastMoney = currentMoney;
+        lastSecurity = currentSecurity;
       }
 
       await ns.sleep(CONFIG.checkInterval);
     } catch (error) {
-      // Log main loop errors as they're critical
       ns.tprint(`CRITICAL ERROR in main loop: ${error.message}`);
       await ns.sleep(CONFIG.checkInterval);
     }
