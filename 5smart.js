@@ -29,7 +29,7 @@ export async function main(ns) {
     reserveMoney: 5e9,
     serverCheckInterval: 60000,
     ramUpgradeMultiplier: 4,
-    maxMoneySpendPercent: 0.1,
+    maxMoneySpendPercent: 0.4,
     statsInterval: 180000,
   };
 
